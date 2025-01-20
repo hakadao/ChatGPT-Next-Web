@@ -1,5 +1,10 @@
+import webpack from "webpack";
+
 const mode = process.env.BUILD_MODE ?? "standalone";
 console.log("[Next] build mode", mode);
+
+const disableChunk = !!process.env.DISABLE_CHUNK || mode === "export";
+console.log("[Next] build with chunk: ", !disableChunk);
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
@@ -9,38 +14,79 @@ const nextConfig = {
       use: ["@svgr/webpack"],
     });
 
+    if (disableChunk) {
+      config.plugins.push(
+        new webpack.optimize.LimitChunkCountPlugin({ maxChunks: 1 }),
+      );
+    }
+
+    config.resolve.fallback = {
+      child_process: false,
+    };
+
     return config;
   },
   output: mode,
+  images: {
+    unoptimized: mode === "export",
+  },
+  experimental: {
+    forceSwcTransforms: true,
+  },
 };
+
+const CorsHeaders = [
+  { key: "Access-Control-Allow-Credentials", value: "true" },
+  { key: "Access-Control-Allow-Origin", value: "*" },
+  {
+    key: "Access-Control-Allow-Methods",
+    value: "*",
+  },
+  {
+    key: "Access-Control-Allow-Headers",
+    value: "*",
+  },
+  {
+    key: "Access-Control-Max-Age",
+    value: "86400",
+  },
+];
 
 if (mode !== "export") {
   nextConfig.headers = async () => {
     return [
       {
-        source: "/:path*",
-        headers: [
-          { key: "Access-Control-Allow-Credentials", value: "true" },
-          { key: "Access-Control-Allow-Origin", value: "*" },
-          {
-            key: "Access-Control-Allow-Methods",
-            value: "GET,OPTIONS,PATCH,DELETE,POST,PUT",
-          },
-          {
-            key: "Access-Control-Allow-Headers",
-            value:
-              "X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version",
-          },
-        ],
+        source: "/api/:path*",
+        headers: CorsHeaders,
       },
     ];
   };
 
   nextConfig.rewrites = async () => {
     const ret = [
+      // adjust for previous version directly using "/api/proxy/" as proxy base route
+      // {
+      //   source: "/api/proxy/v1/:path*",
+      //   destination: "https://api.openai.com/v1/:path*",
+      // },
       {
-        source: "/api/proxy/:path*",
+        // https://{resource_name}.openai.azure.com/openai/deployments/{deploy_name}/chat/completions
+        source:
+          "/api/proxy/azure/:resource_name/deployments/:deploy_name/:path*",
+        destination:
+          "https://:resource_name.openai.azure.com/openai/deployments/:deploy_name/:path*",
+      },
+      {
+        source: "/api/proxy/google/:path*",
+        destination: "https://generativelanguage.googleapis.com/:path*",
+      },
+      {
+        source: "/api/proxy/openai/:path*",
         destination: "https://api.openai.com/:path*",
+      },
+      {
+        source: "/api/proxy/anthropic/:path*",
+        destination: "https://api.anthropic.com/:path*",
       },
       {
         source: "/google-fonts/:path*",
@@ -50,16 +96,11 @@ if (mode !== "export") {
         source: "/sharegpt",
         destination: "https://sharegpt.com/api/conversations",
       },
+      {
+        source: "/api/proxy/alibaba/:path*",
+        destination: "https://dashscope.aliyuncs.com/api/:path*",
+      },
     ];
-
-    const apiUrl = process.env.API_URL;
-    if (apiUrl) {
-      console.log("[Next] using api url ", apiUrl);
-      ret.push({
-        source: "/api/:path*",
-        destination: `${apiUrl}/:path*`,
-      });
-    }
 
     return {
       beforeFiles: ret,

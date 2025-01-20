@@ -5,7 +5,6 @@
   align-items: center;
   justify-content: center;
   padding: 10px;
-
   cursor: pointer;
   transition: all 0.3s ease;
   overflow: hidden;
@@ -27,6 +26,26 @@
       fill: white !important;
     }
   }
+
+  &.danger {
+    color: rgba($color: red, $alpha: 0.8);
+    border-color: rgba($color: red, $alpha: 0.5);
+    background-color: rgba($color: red, $alpha: 0.05);
+
+    &:hover {
+      border-color: red;
+      background-color: rgba($color: red, $alpha: 0.1);
+    }
+
+    path {
+      fill: red !important;
+    }
+  }
+
+  &:hover,
+  &:focus {
+    border-color: var(--primary);
+  }
 }
 
 .shadow {
@@ -35,10 +54,6 @@
 
 .border {
   border: var(--border-in-light);
-}
-
-.icon-button:hover {
-  border-color: var(--primary);
 }
 
 .icon-button-icon {
@@ -56,9 +71,12 @@
 }
 
 .icon-button-text {
-  margin-left: 5px;
   font-size: 12px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+
+  &:not(:first-child) {
+    margin-left: 5px;
+  }
 }

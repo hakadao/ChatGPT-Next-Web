@@ -5,24 +5,39 @@ import RemarkBreaks from "remark-breaks";
 import RehypeKatex from "rehype-katex";
 import RemarkGfm from "remark-gfm";
 import RehypeHighlight from "rehype-highlight";
-import { useRef, useState, RefObject, useEffect } from "react";
-import { copyToClipboard } from "../utils";
+import { useRef, useState, RefObject, useEffect, useMemo } from "react";
+import { copyToClipboard, useWindowSize } from "../utils";
 import mermaid from "mermaid";
-
+import Locale from "../locales";
 import LoadingIcon from "../icons/three-dots.svg";
+import ReloadButtonIcon from "../icons/reload.svg";
 import React from "react";
+import { useDebouncedCallback } from "use-debounce";
+import { showImageModal, FullScreen } from "./ui-lib";
+import {
+  ArtifactsShareButton,
+  HTMLPreview,
+  HTMLPreviewHander,
+} from "./artifacts";
+import { useChatStore } from "../store";
+import { IconButton } from "./button";
 
-export function Mermaid(props: { code: string; onError: () => void }) {
+import { useAppConfig } from "../store/config";
+import clsx from "clsx";
+
+export function Mermaid(props: { code: string }) {
   const ref = useRef<HTMLDivElement>(null);
+  const [hasError, setHasError] = useState(false);
 
   useEffect(() => {
     if (props.code && ref.current) {
       mermaid
         .run({
           nodes: [ref.current],
+          suppressErrors: true,
         })
         .catch((e) => {
-          props.onError();
+          setHasError(true);
           console.error("[Mermaid] ", e.message);
         });
     }
@@ -34,17 +49,20 @@ export function Mermaid(props: { code: string; onError: () => void }) {
     if (!svg) return;
     const text = new XMLSerializer().serializeToString(svg);
     const blob = new Blob([text], { type: "image/svg+xml" });
-    const url = URL.createObjectURL(blob);
-    const win = window.open(url);
-    if (win) {
-      win.onload = () => URL.revokeObjectURL(url);
-    }
+    showImageModal(URL.createObjectURL(blob));
+  }
+
+  if (hasError) {
+    return null;
   }
 
   return (
     <div
-      className="no-dark"
-      style={{ cursor: "pointer", overflow: "auto" }}
+      className={clsx("no-dark", "mermaid")}
+      style={{
+        cursor: "pointer",
+        overflow: "auto",
+      }}
       ref={ref}
       onClick={() => viewSvgInNewWindow()}
     >
@@ -55,37 +73,205 @@ export function Mermaid(props: { code: string; onError: () => void }) {
 
 export function PreCode(props: { children: any }) {
   const ref = useRef<HTMLPreElement>(null);
+  const previewRef = useRef<HTMLPreviewHander>(null);
   const [mermaidCode, setMermaidCode] = useState("");
+  const [htmlCode, setHtmlCode] = useState("");
+  const { height } = useWindowSize();
+  const chatStore = useChatStore();
+  const session = chatStore.currentSession();
 
-  useEffect(() => {
+  const renderArtifacts = useDebouncedCallback(() => {
     if (!ref.current) return;
     const mermaidDom = ref.current.querySelector("code.language-mermaid");
     if (mermaidDom) {
       setMermaidCode((mermaidDom as HTMLElement).innerText);
     }
-  }, [props.children]);
+    const htmlDom = ref.current.querySelector("code.language-html");
+    const refText = ref.current.querySelector("code")?.innerText;
+    if (htmlDom) {
+      setHtmlCode((htmlDom as HTMLElement).innerText);
+    } else if (
+      refText?.startsWith("<!DOCTYPE") ||
+      refText?.startsWith("<svg") ||
+      refText?.startsWith("<?xml")
+    ) {
+      setHtmlCode(refText);
+    }
+  }, 600);
 
-  if (mermaidCode) {
-    return <Mermaid code={mermaidCode} onError={() => setMermaidCode("")} />;
-  }
+  const config = useAppConfig();
+  const enableArtifacts =
+    session.mask?.enableArtifacts !== false && config.enableArtifacts;
+
+  //Wrap the paragraph for plain-text
+  useEffect(() => {
+    if (ref.current) {
+      const codeElements = ref.current.querySelectorAll(
+        "code",
+      ) as NodeListOf<HTMLElement>;
+      const wrapLanguages = [
+        "",
+        "md",
+        "markdown",
+        "text",
+        "txt",
+        "plaintext",
+        "tex",
+        "latex",
+      ];
+      codeElements.forEach((codeElement) => {
+        let languageClass = codeElement.className.match(/language-(\w+)/);
+        let name = languageClass ? languageClass[1] : "";
+        if (wrapLanguages.includes(name)) {
+          codeElement.style.whiteSpace = "pre-wrap";
+        }
+      });
+      setTimeout(renderArtifacts, 1);
+    }
+  }, []);
 
   return (
-    <pre ref={ref}>
-      <span
-        className="copy-code-button"
-        onClick={() => {
-          if (ref.current) {
-            const code = ref.current.innerText;
-            copyToClipboard(code);
-          }
-        }}
-      ></span>
-      {props.children}
-    </pre>
+    <>
+      <pre ref={ref}>
+        <span
+          className="copy-code-button"
+          onClick={() => {
+            if (ref.current) {
+              copyToClipboard(
+                ref.current.querySelector("code")?.innerText ?? "",
+              );
+            }
+          }}
+        ></span>
+        {props.children}
+      </pre>
+      {mermaidCode.length > 0 && (
+        <Mermaid code={mermaidCode} key={mermaidCode} />
+      )}
+      {htmlCode.length > 0 && enableArtifacts && (
+        <FullScreen className="no-dark html" right={70}>
+          <ArtifactsShareButton
+            style={{ position: "absolute", right: 20, top: 10 }}
+            getCode={() => htmlCode}
+          />
+          <IconButton
+            style={{ position: "absolute", right: 120, top: 10 }}
+            bordered
+            icon={<ReloadButtonIcon />}
+            shadow
+            onClick={() => previewRef.current?.reload()}
+          />
+          <HTMLPreview
+            ref={previewRef}
+            code={htmlCode}
+            autoHeight={!document.fullscreenElement}
+            height={!document.fullscreenElement ? 600 : height}
+          />
+        </FullScreen>
+      )}
+    </>
   );
 }
 
+function CustomCode(props: { children: any; className?: string }) {
+  const chatStore = useChatStore();
+  const session = chatStore.currentSession();
+  const config = useAppConfig();
+  const enableCodeFold =
+    session.mask?.enableCodeFold !== false && config.enableCodeFold;
+
+  const ref = useRef<HTMLPreElement>(null);
+  const [collapsed, setCollapsed] = useState(true);
+  const [showToggle, setShowToggle] = useState(false);
+
+  useEffect(() => {
+    if (ref.current) {
+      const codeHeight = ref.current.scrollHeight;
+      setShowToggle(codeHeight > 400);
+      ref.current.scrollTop = ref.current.scrollHeight;
+    }
+  }, [props.children]);
+
+  const toggleCollapsed = () => {
+    setCollapsed((collapsed) => !collapsed);
+  };
+  const renderShowMoreButton = () => {
+    if (showToggle && enableCodeFold && collapsed) {
+      return (
+        <div
+          className={clsx("show-hide-button", {
+            collapsed,
+            expanded: !collapsed,
+          })}
+        >
+          <button onClick={toggleCollapsed}>{Locale.NewChat.More}</button>
+        </div>
+      );
+    }
+    return null;
+  };
+  return (
+    <>
+      <code
+        className={clsx(props?.className)}
+        ref={ref}
+        style={{
+          maxHeight: enableCodeFold && collapsed ? "400px" : "none",
+          overflowY: "hidden",
+        }}
+      >
+        {props.children}
+      </code>
+
+      {renderShowMoreButton()}
+    </>
+  );
+}
+
+function escapeBrackets(text: string) {
+  const pattern =
+    /(```[\s\S]*?```|`.*?`)|\\\[([\s\S]*?[^\\])\\\]|\\\((.*?)\\\)/g;
+  return text.replace(
+    pattern,
+    (match, codeBlock, squareBracket, roundBracket) => {
+      if (codeBlock) {
+        return codeBlock;
+      } else if (squareBracket) {
+        return `$$${squareBracket}$$`;
+      } else if (roundBracket) {
+        return `$${roundBracket}$`;
+      }
+      return match;
+    },
+  );
+}
+
+function tryWrapHtmlCode(text: string) {
+  // try add wrap html code (fixed: html codeblock include 2 newline)
+  // ignore embed codeblock
+  if (text.includes("```")) {
+    return text;
+  }
+  return text
+    .replace(
+      /([`]*?)(\w*?)([\n\r]*?)(<!DOCTYPE html>)/g,
+      (match, quoteStart, lang, newLine, doctype) => {
+        return !quoteStart ? "\n```html\n" + doctype : match;
+      },
+    )
+    .replace(
+      /(<\/body>)([\r\n\s]*?)(<\/html>)([\n\r]*)([`]*)([\n\r]*?)/g,
+      (match, bodyEnd, space, htmlEnd, newLine, quoteEnd) => {
+        return !quoteEnd ? bodyEnd + space + htmlEnd + "\n```\n" : match;
+      },
+    );
+}
+
 function _MarkDownContent(props: { content: string }) {
+  const escapedContent = useMemo(() => {
+    return tryWrapHtmlCode(escapeBrackets(props.content));
+  }, [props.content]);
+
   return (
     <ReactMarkdown
       remarkPlugins={[RemarkMath, RemarkGfm, RemarkBreaks]}
@@ -101,15 +287,31 @@ function _MarkDownContent(props: { content: string }) {
       ]}
       components={{
         pre: PreCode,
+        code: CustomCode,
+        p: (pProps) => <p {...pProps} dir="auto" />,
         a: (aProps) => {
           const href = aProps.href || "";
+          if (/\.(aac|mp3|opus|wav)$/.test(href)) {
+            return (
+              <figure>
+                <audio controls src={href}></audio>
+              </figure>
+            );
+          }
+          if (/\.(3gp|3g2|webm|ogv|mpeg|mp4|avi)$/.test(href)) {
+            return (
+              <video controls width="99.9%">
+                <source src={href} />
+              </video>
+            );
+          }
           const isInternal = /^\/#/i.test(href);
           const target = isInternal ? "_self" : aProps.target ?? "_blank";
           return <a {...aProps} target={target} />;
         },
       }}
     >
-      {props.content}
+      {escapedContent}
     </ReactMarkdown>
   );
 }
@@ -121,60 +323,30 @@ export function Markdown(
     content: string;
     loading?: boolean;
     fontSize?: number;
+    fontFamily?: string;
     parentRef?: RefObject<HTMLDivElement>;
     defaultShow?: boolean;
   } & React.DOMAttributes<HTMLDivElement>,
 ) {
   const mdRef = useRef<HTMLDivElement>(null);
-  const renderedHeight = useRef(0);
-  const inView = useRef(!!props.defaultShow);
-
-  const parent = props.parentRef?.current;
-  const md = mdRef.current;
-
-  const checkInView = () => {
-    if (parent && md) {
-      const parentBounds = parent.getBoundingClientRect();
-      const twoScreenHeight = Math.max(500, parentBounds.height * 2);
-      const mdBounds = md.getBoundingClientRect();
-      const parentTop = parentBounds.top - twoScreenHeight;
-      const parentBottom = parentBounds.bottom + twoScreenHeight;
-      const isOverlap =
-        Math.max(parentTop, mdBounds.top) <=
-        Math.min(parentBottom, mdBounds.bottom);
-      inView.current = isOverlap;
-    }
-
-    if (inView.current && md) {
-      renderedHeight.current = Math.max(
-        renderedHeight.current,
-        md.getBoundingClientRect().height,
-      );
-    }
-  };
-
-  setTimeout(() => checkInView(), 1);
 
   return (
     <div
       className="markdown-body"
       style={{
         fontSize: `${props.fontSize ?? 14}px`,
-        height:
-          !inView.current && renderedHeight.current > 0
-            ? renderedHeight.current
-            : "auto",
+        fontFamily: props.fontFamily || "inherit",
       }}
       ref={mdRef}
       onContextMenu={props.onContextMenu}
       onDoubleClickCapture={props.onDoubleClickCapture}
+      dir="auto"
     >
-      {inView.current &&
-        (props.loading ? (
-          <LoadingIcon />
-        ) : (
-          <MarkdownContent content={props.content} />
-        ))}
+      {props.loading ? (
+        <LoadingIcon />
+      ) : (
+        <MarkdownContent content={props.content} />
+      )}
     </div>
   );
 }

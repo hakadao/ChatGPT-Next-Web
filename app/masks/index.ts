@@ -1,6 +1,4 @@
 import { Mask } from "../store/mask";
-import { CN_MASKS } from "./cn";
-import { EN_MASKS } from "./en";
 
 import { type BuiltinMask } from "./typing";
 export { type BuiltinMask } from "./typing";
@@ -9,8 +7,8 @@ export const BUILTIN_MASK_ID = 100000;
 
 export const BUILTIN_MASK_STORE = {
   buildinId: BUILTIN_MASK_ID,
-  masks: {} as Record<number, Mask>,
-  get(id?: number) {
+  masks: {} as Record<string, BuiltinMask>,
+  get(id?: string) {
     if (!id) return undefined;
     return this.masks[id] as Mask | undefined;
   },
@@ -21,6 +19,20 @@ export const BUILTIN_MASK_STORE = {
   },
 };
 
-export const BUILTIN_MASKS: Mask[] = [...CN_MASKS, ...EN_MASKS].map((m) =>
-  BUILTIN_MASK_STORE.add(m),
-);
+export const BUILTIN_MASKS: BuiltinMask[] = [];
+
+if (typeof window != "undefined") {
+  // run in browser skip in next server
+  fetch("/masks.json")
+    .then((res) => res.json())
+    .catch((error) => {
+      console.error("[Fetch] failed to fetch masks", error);
+      return { cn: [], tw: [], en: [] };
+    })
+    .then((masks) => {
+      const { cn = [], tw = [], en = [] } = masks;
+      return [...cn, ...tw, ...en].map((m) => {
+        BUILTIN_MASKS.push(BUILTIN_MASK_STORE.add(m));
+      });
+    });
+}
